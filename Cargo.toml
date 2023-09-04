@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ethers = { version = "2.0", features = ["ws", "rustls"] }
+ethers = { version = "2.0", features = ["ws", "rustls", "optimism"] }
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = "0.20.0"
 eyre = "0.6"
@@ -17,3 +17,28 @@ env_logger = "0.10.0"
 ethabi = "18.0.0"
 serde = "1.0.188"
 serde_json = "1.0.105"
+serde-aux = "3"
+futures-util = "0.3.28"
+actix-web = "4.0.0"
+config = "0.11"
+secrecy = { version = "0.8", features = ["serde"] }
+tracing = { version = "0.1", features = ["log"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+tracing-bunyan-formatter = "0.3"
+tracing-log = "0.1"
+tracing-actix-web = "0.5"
+
+[dependencies.sqlx]
+version = "0.5.7"
+default-features = false
+features = [
+  "runtime-actix-rustls",
+  "macros",
+  "postgres",
+  "uuid",
+  "chrono",
+  "migrate",
+  # "offline",
+  "bigdecimal",
+  "json",
+]

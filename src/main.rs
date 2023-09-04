@@ -1,103 +1,82 @@
-use env_logger::{Builder, WriteStyle};
-use ethers::prelude::*;
-use ethers::types::Filter;
-use log::LevelFilter;
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use ethereum::build_log;
+use ethereum::configurations::get_configuration;
+use ethereum::subscription::EthSubscription;
+use ethers::types::Transaction;
+use futures_util::{SinkExt, StreamExt};
+use log::{error, info};
+use serde_json::Value;
+use sqlx::{postgres::PgPoolOptions, PgPool};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use url::Url;
 
-const RPC_URL: &'static str = "https://eth.llamarpc.com";
 const WSS_URL: &'static str = "wss://eth-mainnet.g.alchemy.com/v2/jdL1Z4WEHYrliONc3q_TNJ5q8l3FV1cj";
-
-// abigen!(
-//     IUniswapV2Pair,
-//     r#"[function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)]"#
-// );
-
-pub struct AbiStorage {
-    pub abis: HashMap<Address, abi::Abi>,
-}
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() -> eyre::Result<()> {
-    let filter_level = std::env::var("RUST_LOG").unwrap_or("info".to_string());
-    Builder::new()
-        .filter(
-            None,
-            filter_level
-                .parse::<LevelFilter>()
-                .unwrap_or(LevelFilter::Info),
-        )
-        .write_style(WriteStyle::Always)
-        .init();
+    build_log();
+    let url = Url::parse(WSS_URL)?;
 
-    // let function_selector = &ethers::utils::id("getReserves()")[0..4];
+    let (stream, _) = connect_async(url).await?;
+    let (mut write, mut read) = stream.split();
 
-    let provider = Arc::new(Provider::<Ws>::connect_with_reconnects(WSS_URL, 10).await?);
-    let http_provider = Provider::try_from(RPC_URL)?;
+    let configuration = get_configuration().expect("Failed to read configuration");
+    let connection_pool = PgPoolOptions::new()
+        .connect_timeout(std::time::Duration::from_secs(2))
+        .connect_lazy_with(configuration.database.with_db());
+    let pool = actix_web::web::Data::new(connection_pool);
 
-    // let mut abis: HashMap<Address, abi::Abi> = HashMap::new();
+    let request = r#"{"jsonrpc":"2.0","id": 2, "method": "eth_subscribe", "params": ["alchemy_minedTransactions"]}"#;
+    write.send(Message::Text(request.to_string())).await?;
 
-    let mut stream = provider.subscribe_logs(&Filter::new()).await?;
-    // let swap_event_id: Vec<u8> =
-    //     ethers::utils::id("Swap(address,uint256,uint256,uint256,uint256,address)").to_vec();
-    while let Some(message) = stream.next().await {
-        let _a = message;
+    while let Some(msg) = read.next().await {
+        match msg {
+            Ok(Message::Text(text)) => {
+                let value = Value::from(text.clone());
+
+                if let Value::String(string_value) = &value {
+                    let subscription_result =
+                        serde_json::from_str::<EthSubscription>(string_value)?;
+
+                    match subscription_result.params {
+                        Some(params) => {
+                            info!("Received transaction: {:?}", params.result.transaction);
+                            insert_transaction(&pool, &params.result.transaction).await?;
+                        }
+                        None => continue,
+                    }
+                }
+            }
+
+            Ok(Message::Binary(bin)) => info!("Received binary: {:?}", bin),
+            Err(e) => error!("Error receiving message: {:?}", e),
+            _ => {}
+        }
     }
-    // let rpc_provider = Provider::<Http>::connect(RPC_URL).await;
-    // let data = log.data;
-    // let tx = http_provider
-    // .get_transaction(message.transaction_hash.unwrap())
-    // .await;
-    // log::info!("{:#?}", &i);
-    // log::info!("{:#?}", i);
-    // if let Some(tx) = transaction_provider
-    //     .get_transaction(log.transaction_hash.unwrap())
-    //     .await?
-    // {
-    //     log::info!("{:#?}", i);
-    //     i += 1;
-    // }
+    Ok(())
+}
 
-    //     log::debug!("Transaction found");
-    //     if let Some(contract_address) = tx.to {
-    //         let option_abi = if let Some(abi) = abis.get(&contract_address) {
-    //             log::debug!("ABI for contract {:?} found in cache", contract_address);
-    //             Some(abi.clone())
-    //         } else {
-    //             let abi_url = format!(
-    //                 "https://api.etherscan.io/api\
-    //                 ?module=contract\
-    //                 &action=getabi\
-    //                 &address={:?}\
-    //                 &apikey=6NJHDJ7CJPSJ4ITC81HB4UJB49J29M2HSM",
-    //                 contract_address
-    //             );
-    //             let response = reqwest::get(&abi_url)
-    //                 .await?
-    //                 .json::<HashMap<String, String>>()
-    //                 .await?;
-    //
-    //             if let Some(result) = response.get("result") {
-    //                 if let Ok(parsed_abi) = serde_json::from_str::<abi::Abi>(result) {
-    //                     log::debug!("ABI for contract {:?} added to cache", contract_address);
-    //                     abis.insert(contract_address, parsed_abi.clone());
-    //                     Some(parsed_abi)
-    //                 } else {
-    //                     log::debug!("Failed to parse found ABI");
-    //                     None
-    //                 }
-    //             } else {
-    //                 log::debug!("No ABI found");
-    //                 None
-    //             }
-    //         };
-    //         if let Some(unpacked_abi) = &option_abi {
-    //             log::debug!("Events in abi: \n{:#?}", unpacked_abi.events);
-    //         }
-    //     }
-    // }
-    // }
-
+pub async fn insert_transaction(
+    pool: &PgPool,
+    transaction: &Transaction,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        r#"
+    INSERT INTO transactions (
+        block_hash, 
+        block_number
+    )
+    VALUES (
+        $1, $2
+    )
+    "#,
+        transaction.block_hash.unwrap().to_fixed_bytes().to_vec(),
+        transaction.block_number.unwrap().as_u32() as i32,
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to execute query: {:?}", e);
+        e
+    })?;
     Ok(())
 }
