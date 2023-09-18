@@ -1,4 +1,6 @@
+use futures_util::Future;
 use serde::Deserialize;
+use sqlx::{Pool, Postgres};
 
 #[derive(Debug, Deserialize)]
 pub struct EthSubscription {

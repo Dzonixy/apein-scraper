@@ -28,6 +28,8 @@ async fn main() -> eyre::Result<()> {
     let request = r#"{"jsonrpc":"2.0","id": 2, "method": "eth_subscribe", "params": ["alchemy_minedTransactions"]}"#;
     write.send(Message::Text(request.to_string())).await?;
 
+    let r = read.next();
+
     while let Some(msg) = read.next().await {
         match msg {
             Ok(Message::Text(text)) => {
@@ -39,8 +41,9 @@ async fn main() -> eyre::Result<()> {
 
                     match subscription_result.params {
                         Some(params) => {
-                            info!("Received transaction: {:?}", params.result.transaction);
-                            insert_transaction(&pool, &params.result.transaction).await?;
+                            info!("Received transaction: {:#?}", params.result.transaction);
+                            // insert_trader(&pool, &params.result.transaction).await?;
+                            // insert_transaction(&pool, &params.result.transaction).await?;
                         }
                         None => continue,
                     }
@@ -55,28 +58,64 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 
-pub async fn insert_transaction(
-    pool: &PgPool,
-    transaction: &Transaction,
-) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        r#"
-    INSERT INTO transactions (
-        block_hash, 
-        block_number
-    )
-    VALUES (
-        $1, $2
-    )
-    "#,
-        transaction.block_hash.unwrap().to_fixed_bytes().to_vec(),
-        transaction.block_number.unwrap().as_u32() as i32,
-    )
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to execute query: {:?}", e);
-        e
-    })?;
-    Ok(())
-}
+// pub async fn insert_trader(pool: &PgPool, transaction: &Transaction) -> Result<(), sqlx::Error> {
+//     let tx = transaction.clone();
+//     let trader = tx.from.to_fixed_bytes();
+//     let trader_name = "";
+//
+//     sqlx::query!(
+//         r#"
+//             INSERT INTO traders (public_key, trader_name)
+//             VALUES ($1, $2)
+//             ON CONFLICT (public_key) DO NOTHING;
+//         "#,
+//         trader.as_ref(),
+//         trader_name
+//     )
+//     .execute(pool)
+//     .await
+//     .map_err(|e| {
+//         tracing::error!("Failed to execute query: {:?}", e);
+//         e
+//     })?;
+//
+//     Ok(())
+// }
+//
+// pub async fn insert_transaction(
+//     pool: &PgPool,
+//     transaction: &Transaction,
+// ) -> Result<(), sqlx::Error> {
+//     let tx = transaction.clone();
+//
+//     let hash = tx.hash.to_fixed_bytes();
+//     let from = tx.from.to_fixed_bytes();
+//     let block_hash = tx.block_hash.unwrap().to_fixed_bytes();
+//
+//     sqlx::query!(
+//         r#"
+//             INSERT INTO transactions (
+//                 transaction_hash,
+//                 wallet_public_key,
+//                 transaction_data,
+//                 nonce,
+//                 block_hash,
+//                 block_number
+//             )
+//             VALUES ($1, $2, $3, $4, $5, $6)
+//         "#,
+//         hash.as_ref(),
+//         from.as_ref(),
+//         &tx.input.as_ref(),
+//         tx.nonce.as_u64() as i64,
+//         block_hash.as_ref(),
+//         tx.block_number.unwrap().as_u64() as i64
+//     )
+//     .execute(pool)
+//     .await
+//     .map_err(|e| {
+//         tracing::error!("Failed to execute query: {:?}", e);
+//         e
+//     })?;
+//     Ok(())
+// }
